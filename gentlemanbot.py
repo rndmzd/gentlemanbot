@@ -13,6 +13,7 @@ import email
 from email.header import decode_header
 # import re
 import json
+import sys
 
 # =======================
 # Configuration and Logging
@@ -21,16 +22,27 @@ import json
 config = configparser.ConfigParser()
 config.read('config.ini')
 
-# Configure logging
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler("gentleman_bot.log"),
-        logging.StreamHandler()
-    ]
-)
+# =======================
+# Logging Configuration
+# =======================
+
+# Create a custom logger
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)  # Set the desired logging level
+
+# Create handlers
+file_handler = logging.FileHandler("gentleman_bot.log", encoding='utf-8')
+stream_handler = logging.StreamHandler(sys.stdout)
+stream_handler.setLevel(logging.DEBUG)
+
+# Create formatters and add them to handlers
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+file_handler.setFormatter(formatter)
+stream_handler.setFormatter(formatter)
+
+# Add handlers to the logger
+logger.addHandler(file_handler)
+logger.addHandler(stream_handler)
 
 # =======================
 # OpenAI Client Setup
@@ -54,6 +66,8 @@ smtp_password = config['Email']['password']
 imap_server = config['Email']['imap_server']
 imap_email = config['Email']['email']
 imap_password = config['Email']['password']
+
+imap_check_interval = int(config['Email']['imap_check_interval'])
 
 # =======================
 # SMS Configuration
@@ -91,7 +105,8 @@ class UserPreferences:
         self.conversation: List[Dict] = kwargs.get('conversation', [])
         self.created_at: datetime = kwargs.get('created_at', datetime.now(timezone.utc))
         self.updated_at: datetime = kwargs.get('updated_at', datetime.now(timezone.utc))
-        self.status: str = kwargs.get('status', "pending")  # "pending", "active", "declined"
+        self.status: str = kwargs.get('status', "pending")  # "pending", "active", "declined", "awaiting_character_selection", "active_with_character"
+        self.bot_name: Optional[str] = kwargs.get('bot_name')  # To store selected character's name
 
     def to_dict(self):
         return {
@@ -101,7 +116,8 @@ class UserPreferences:
             "conversation": self.conversation,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
-            "status": self.status
+            "status": self.status,
+            "bot_name": self.bot_name
         }
 
 class Prompts:
@@ -162,6 +178,29 @@ async def get_prompts() -> Optional[Prompts]:
     return None
 
 # =======================
+# Define Characters
+# =======================
+
+CHARACTERS = [
+    {
+        "name": "Zach",
+        "image_url": "https://assets.rndmzd.com/zach.png"
+    },
+    {
+        "name": "Tyler",
+        "image_url": "https://assets.rndmzd.com/tyler.png"
+    },
+    {
+        "name": "Jake",
+        "image_url": "https://assets.rndmzd.com/jake.png"
+    },
+    {
+        "name": "Chase",
+        "image_url": "https://assets.rndmzd.com/chase.png"
+    }
+]
+
+# =======================
 # OpenAI Interaction
 # =======================
 
@@ -179,10 +218,8 @@ async def generate_message(incoming_message: str, phone_number: str):
         prompts = Prompts()
 
     # Prepare conversation for OpenAI
-    conversation = prompts.conversation.copy() if hasattr(prompts, 'conversation') else []
-
-    # If conversation history exists, use it; else, initialize with system prompt
     if not user.conversation:
+        # Initialize conversation with system prompt
         conversation = [
             {"role": "system", "content": prompts.system_prompt}
         ]
@@ -191,6 +228,17 @@ async def generate_message(incoming_message: str, phone_number: str):
 
     # Append the new user message
     conversation.append({"role": "user", "content": incoming_message})
+
+    # Append bot_name if it exists to personalize the system prompt
+    if user.bot_name:
+        # Optionally, adjust the system prompt or include a message to set the bot's name
+        # Here, we assume the system prompt already uses the bot's name
+        pass
+
+    # Truncate conversation if it's too long (optional, based on token limits)
+    MAX_CONVERSATION_LENGTH = 20  # Adjust as needed
+    if len(conversation) > MAX_CONVERSATION_LENGTH:
+        conversation = conversation[-MAX_CONVERSATION_LENGTH:]
 
     logger.debug(f"Sending request to OpenAI with conversation: {json.dumps(conversation, default=str)}")
     try:
@@ -221,15 +269,37 @@ async def extract_name_from_message(message: str) -> Optional[str]:
                 {"role": "system", "content": "You are a name extractor. If there is a name in the message, respond with ONLY the name. If no name is found, respond with 'NONE'. Example: 'Hi this is John' -> 'John', 'Hello there' -> 'NONE'"},
                 {"role": "user", "content": message}
             ],
-            max_tokens=50
+            max_tokens=250
         )
         
         extracted_name = response.choices[0].message.content.strip()
         logger.debug(f"Extracted name: {extracted_name}")
         
-        return None if extracted_name == "NONE" else extracted_name
+        return None if extracted_name.upper() == "NONE" else extracted_name
     except Exception as e:
         logger.error(f"Error extracting name: {e}")
+        return None
+
+async def extract_character_selection(message: str) -> Optional[str]:
+    """Use OpenAI to extract character selection from the user's message."""
+    logger.debug(f"Attempting to extract character selection from message: {message}")
+    
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "You are a character selection assistant. Extract the character's name from the user's reply. If the user replies with a number (1-4), map it to the corresponding character name. Respond with ONLY the character's name. If no valid selection is found, respond with 'INVALID'."},
+                {"role": "user", "content": message}
+            ],
+            max_tokens=50
+        )
+        
+        extracted_selection = response.choices[0].message.content.strip()
+        logger.debug(f"Extracted character selection: {extracted_selection}")
+        
+        return None if extracted_selection.upper() == "INVALID" else extracted_selection
+    except Exception as e:
+        logger.error(f"Error extracting character selection: {e}")
         return None
 
 # =======================
@@ -270,8 +340,8 @@ async def send_sms(message: str, recipient_number: str, recipient_carrier_gatewa
 async def daily_message(recipient_number: str):
     logger.info("Running daily_message cron job...")
     user = await get_user(recipient_number)
-    if not user or user.status != "active":
-        logger.info("User is not active or doesn't exist, skipping daily message.")
+    if not user or user.status != "active_with_character":
+        logger.info("User is not active with a character selected or doesn't exist, skipping daily message.")
         return
 
     prompts = await get_prompts()
@@ -282,7 +352,7 @@ async def daily_message(recipient_number: str):
     # Generate daily message
     message = await generate_message(prompts.morning_prompt, recipient_number)
     if message:
-        await send_sms(message)
+        await send_sms(message, recipient_number)
         logger.info("Daily message sent successfully.")
     else:
         logger.warning("No message generated for daily message.")
@@ -386,6 +456,12 @@ async def process_inbound_emails():
     """
     Process inbound emails by checking the IMAP inbox and handling each message accordingly.
     """
+    # Send character selection prompt with images (as URLs)
+    character_selection_message = (
+        f"Great! Please select one of the following characters by replying with the corresponding number:\n"
+        + "\n".join([f"{i+1}. {char['name']}\n{char['image_url']}" for i, char in enumerate(CHARACTERS)])
+    )
+
     logger.debug("Starting process to handle inbound emails.")
     messages = await asyncio.to_thread(check_imap_inbox)
     if not messages:
@@ -411,7 +487,7 @@ async def process_inbound_emails():
             logger.debug(f"Carrier_gateway extracted from email: {carrier_gateway}")
             # New user: create with status 'pending' and ask for confirmation
             user = await create_user(sender_part, carrier_gateway, status="pending")
-            confirmation_message = "Hi! You are about to connect with Gentleman Bot. Reply 'Yes' to continue or 'No' to decline."
+            confirmation_message = "Hi! You are about to connect with your perfect gentleman. Reply 'Yes' to continue or 'No' to decline."
             await send_sms(confirmation_message, recipient_number=sender_part)
             logger.info(f"Sent confirmation message to new user {sender_part}")
             mark_email_as_read(msg_id)
@@ -420,11 +496,9 @@ async def process_inbound_emails():
         if user.status == "pending":
             # Expecting "Yes" or "No"
             if body.lower() == "yes":
-                await update_user_preferences(sender_part, {"status": "active"})
-                # welcome_message = "Great! You are now connected with Gentleman Bot. How can I help you today?"
-                welcome_message = "Hey there, beautiful! I'm so glad you wanted to connect. What's your name?"
-                await send_sms(welcome_message, recipient_number=sender_part)
-                logger.info(f"User {sender_part} confirmed to activate.")
+                await update_user_preferences(sender_part, {"status": "awaiting_character_selection"})
+                await send_sms(character_selection_message, recipient_number=sender_part)
+                logger.info(f"Sent character selection message to user {sender_part}")
             elif body.lower() == "no":
                 await update_user_preferences(sender_part, {"status": "declined"})
                 goodbye_message = "No problem. Have a great day!"
@@ -438,14 +512,44 @@ async def process_inbound_emails():
             mark_email_as_read(msg_id)
             continue
 
+        if user.status == "awaiting_character_selection":
+            # Expecting a number between 1 and 4
+            try:
+                selection = int(body.strip())
+                if 1 <= selection <= 4:
+                    selected_character = CHARACTERS[selection - 1]
+                    await update_user_preferences(sender_part, {
+                        "status": "active_with_character",
+                        "bot_name": selected_character["name"],
+                        "personal_info": {"character_name": selected_character["name"]}
+                    })
+                    selection_ack_message = f"Awesome! I'm {selected_character['name']}, and I'm here to be your perfect gentleman. What's your name?"
+                    await send_sms(selection_ack_message, recipient_number=sender_part)
+                    logger.info(f"User {sender_part} selected character {selected_character['name']}")
+                    
+                    # Update conversation with a system message to set the bot's name
+                    user.conversation.append({"role": "system", "content": f"You are now {selected_character['name']}, a charismatic boyfriend who sends compliments and encouraging text messages to his girlfriend. You are energetic, fun-loving, easy-going, and always act like a gentleman. Messages should be informal, casual, and no more than 240 characters in length."})
+                    await update_user_preferences(sender_part, {"conversation": user.conversation})
+                else:
+                    # Invalid selection
+                    invalid_selection_message = "Invalid selection. Please reply with a number between 1 and 4 to select your perfect gentleman."
+                    await send_sms(invalid_selection_message, recipient_number=sender_part)
+                    logger.info(f"User {sender_part} provided an invalid selection number: {selection}")
+            except ValueError:
+                # Non-integer response
+                invalid_selection_message = "Invalid input. Please reply with a number between 1 and 4 to select your perfect gentleman."
+                await send_sms(invalid_selection_message, recipient_number=sender_part)
+                logger.info(f"User {sender_part} provided a non-integer selection: {body}")
+            mark_email_as_read(msg_id)
+            continue
+
         if user.status == "declined":
             # User has previously declined; you can choose to ignore or allow them to re-enable
             # Here, we allow re-enabling by replying 'Yes'
             if body.lower() == "yes":
-                await update_user_preferences(sender_part, {"status": "active"})
-                reactivation_message = "Welcome back! You are now connected with Gentleman Bot. How can I assist you today?"
-                await send_sms(reactivation_message, recipient_number=sender_part)
-                logger.info(f"User {sender_part} reactivated.")
+                await update_user_preferences(sender_part, {"status": "awaiting_character_selection"})
+                await send_sms(character_selection_message, recipient_number=sender_part)
+                logger.info(f"Sent character selection message to reactivated user {sender_part}")
             else:
                 # Optionally ignore or send a polite reminder
                 ignore_message = "You previously declined. If you change your mind, just reply 'Yes'."
@@ -454,19 +558,8 @@ async def process_inbound_emails():
             mark_email_as_read(msg_id)
             continue
 
-        if user.status == "active":
+        if user.status == "active_with_character":
             logger.info(f"Processing message from active user {sender_part}: {body}")
-
-            if not user.personal_info.get("name"):
-                # Extract name from message
-                extracted_name = await extract_name_from_message(body)
-                if extracted_name:
-                    updated_info = user.personal_info.copy()
-                    updated_info["name"] = extracted_name
-                    await update_user_preferences(sender_part, {"personal_info": updated_info})
-                    logger.info(f"Updated personal_info in DB for {sender_part}: {updated_info}")
-                else:
-                    logger.info(f"No name extracted from message for {sender_part}")
 
             # Append user message to conversation
             user.conversation.append({"role": "user", "content": body})
@@ -499,13 +592,13 @@ async def main():
         logger.debug("Starting IMAP check loop...")
         while True:
             await process_inbound_emails()
-            await asyncio.sleep(60)  # Check every 60 seconds
+            await asyncio.sleep(imap_check_interval)  # Check every 60 seconds
 
     asyncio.create_task(imap_check_loop())
 
-    # Optionally send an initial message to a known recipient_number if active
+    # Optionally send an initial message to a known recipient_number if active_with_character
     user = await get_user(TEST_USER_NUMBER)
-    if user and user.status == "active":
+    if user and user.status == "active_with_character":
         prompts = await get_prompts()
         if prompts:
             default_message = prompts.morning_prompt
@@ -514,7 +607,7 @@ async def main():
             if response_message:
                 # Append assistant's reply to conversation
                 user.conversation.append({"role": "assistant", "content": response_message})
-                await send_sms(response_message)
+                await send_sms(response_message, recipient_number=TEST_USER_NUMBER)
                 # Update conversation in DB
                 await update_user_preferences(TEST_USER_NUMBER, {"conversation": user.conversation})
                 logger.info("Initial daily message sent.")
