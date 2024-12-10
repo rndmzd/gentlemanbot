@@ -11,7 +11,9 @@ import aiocron
 import imaplib
 import email
 from email.header import decode_header
-# import re
+import pytz
+import phonenumbers
+from phonenumbers import geocoder, timezone as ph_timezone
 import json
 import sys
 
@@ -43,6 +45,12 @@ stream_handler.setFormatter(formatter)
 # Add handlers to the logger
 logger.addHandler(file_handler)
 logger.addHandler(stream_handler)
+
+# =======================
+# Timezone Configuration
+# =======================
+
+TIMEZONE = pytz.timezone(config['General']['timezone'])
 
 # =======================
 # OpenAI Client Setup
@@ -107,6 +115,7 @@ class UserPreferences:
         self.updated_at: datetime = kwargs.get('updated_at', datetime.now(timezone.utc))
         self.status: str = kwargs.get('status', "pending")  # "pending", "active", "declined", "awaiting_character_selection", "active_with_character"
         self.bot_name: Optional[str] = kwargs.get('bot_name')  # To store selected character's name
+        self.timezone: str = kwargs.get('timezone', "America/Chicago")  # Default to America/Chicago if not set
 
     def to_dict(self):
         return {
@@ -117,7 +126,8 @@ class UserPreferences:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "status": self.status,
-            "bot_name": self.bot_name
+            "bot_name": self.bot_name,
+            "timezone": self.timezone
         }
 
 class Prompts:
@@ -125,19 +135,30 @@ class Prompts:
         self.system_prompt: str = kwargs.get(
             'system_prompt',
             "You are a charismatic boyfriend who sends compliments and encouraging text messages to his girlfriend. "
-            "You are energetic, fun-loving, easy-going, and always act like a gentleman. "
+            "You are energetic, fun-loving, easy-going, and act like a gentleman while also being a bit playful and flirtatious. "
             "Messages should be informal, casual, and no more than 240 characters in length."
         )
         self.morning_prompt: str = kwargs.get(
             'morning_prompt',
-            "Write a morning text message to a girlfriend that is complimentary, motivating, and demonstrates your caring nature."
+            "Write a good morning text message to a girlfriend that is complimentary, motivating, and demonstrates your caring nature."
+        )
+        self.afternoon_prompt: str = kwargs.get(
+            'afternoon_prompt',
+            "Write a good afternoon text message to a girlfriend that is thoughtful, engaging, and keeps the conversation lively."
+        )
+        self.evening_prompt: str = kwargs.get(
+            'evening_prompt',
+            "Write a good evening text message to a girlfriend that is relaxing, affectionate, and wraps up the day positively."
         )
 
     def to_dict(self):
         return {
             "system_prompt": self.system_prompt,
-            "morning_prompt": self.morning_prompt
+            "morning_prompt": self.morning_prompt,
+            "afternoon_prompt": self.afternoon_prompt,
+            "evening_prompt": self.evening_prompt
         }
+
 
 # =======================
 # Database Operations
@@ -154,7 +175,11 @@ async def get_user(phone_number: str) -> Optional[UserPreferences]:
 
 async def create_user(phone_number: str, carrier_gateway: str, status="pending") -> UserPreferences:
     logger.info(f"Creating new user with phone_number={phone_number} and status={status}")
-    user = UserPreferences(phone_number, carrier_gateway, status=status)
+    
+    # Determine the timezone based on the phone number
+    user_timezone = get_timezone_from_phone_number(phone_number)
+    
+    user = UserPreferences(phone_number, carrier_gateway, status=status, timezone=user_timezone)
     await users_collection.insert_one(user.to_dict())
     logger.debug(f"User created: {json.dumps(user.to_dict(), default=str)}")
     return user
@@ -269,7 +294,7 @@ async def extract_name_from_message(message: str) -> Optional[str]:
                 {"role": "system", "content": "You are a name extractor. If there is a name in the message, respond with ONLY the name. If no name is found, respond with 'NONE'. Example: 'Hi this is John' -> 'John', 'Hello there' -> 'NONE'"},
                 {"role": "user", "content": message}
             ],
-            max_tokens=250
+            max_tokens=50
         )
         
         extracted_name = response.choices[0].message.content.strip()
@@ -336,7 +361,7 @@ async def send_sms(message: str, recipient_number: str, recipient_carrier_gatewa
 # Daily Cron Job
 # =======================
 
-@aiocron.crontab('0 8 * * *')  # Runs at 8:00 AM every day
+@aiocron.crontab('0 9,15,21 * * *')  # Runs at 9:00 AM, 3:00 PM, and 9:00 PM every day
 async def daily_message(recipient_number: str):
     logger.info("Running daily_message cron job...")
     user = await get_user(recipient_number)
@@ -344,18 +369,49 @@ async def daily_message(recipient_number: str):
         logger.info("User is not active with a character selected or doesn't exist, skipping daily message.")
         return
 
+    if not user.timezone:
+        logger.warning(f"User {recipient_number} does not have a timezone set. Skipping message.")
+        return
+
+    try:
+        user_timezone = pytz.timezone(user.timezone)
+    except pytz.UnknownTimeZoneError:
+        logger.error(f"Unknown timezone '{user.timezone}' for user {recipient_number}. Skipping message.")
+        return
+
+    # Get current time in user's timezone
+    current_time = datetime.now(user_timezone)
+    current_hour = current_time.hour
+
+    # Retrieve system prompts
     prompts = await get_prompts()
     if not prompts:
         logger.warning("No prompts found, skipping daily message.")
         return
 
-    # Generate daily message
-    message = await generate_message(prompts.morning_prompt, recipient_number)
+    # Determine time of day
+    if 4 <= current_hour < 12:
+        prompt = prompts.morning_prompt
+        time_of_day = "morning"
+    elif 12 <= current_hour < 17:
+        prompt = prompts.afternoon_prompt
+        time_of_day = "afternoon"
+    elif 17 <= current_hour < 22 or current_hour < 4:
+        prompt = prompts.evening_prompt
+        time_of_day = "evening"
+    else:
+        # Optional: Handle late night messages or skip sending. Never executes with the current time windows
+        logger.info(f"It's outside of defined sending hours ({current_hour}h). Skipping message.")
+        return
+
+    # Generate customized message
+    message = await generate_message(prompt, recipient_number)
     if message:
         await send_sms(message, recipient_number)
-        logger.info("Daily message sent successfully.")
+        logger.info(f"Daily {time_of_day} message sent successfully to {recipient_number}.")
     else:
         logger.warning("No message generated for daily message.")
+
 
 # =======================
 # IMAP Email Processing
@@ -456,12 +512,6 @@ async def process_inbound_emails():
     """
     Process inbound emails by checking the IMAP inbox and handling each message accordingly.
     """
-    # Send character selection prompt with images (as URLs)
-    character_selection_message = (
-        f"Great! Please select one of the following characters by replying with the corresponding number:\n"
-        + "\n".join([f"{i+1}. {char['name']}\n{char['image_url']}" for i, char in enumerate(CHARACTERS)])
-    )
-
     logger.debug("Starting process to handle inbound emails.")
     messages = await asyncio.to_thread(check_imap_inbox)
     if not messages:
@@ -481,6 +531,7 @@ async def process_inbound_emails():
 
         # Retrieve user
         user = await get_user(sender_part)
+        logger.debug(f"Retrieved user from DB: {user}")
 
         if user is None:
             carrier_gateway = from_email.split('@')[1] if '@' in from_email else ""
@@ -492,6 +543,12 @@ async def process_inbound_emails():
             logger.info(f"Sent confirmation message to new user {sender_part}")
             mark_email_as_read(msg_id)
             continue
+
+        # Send character selection prompt with images (as URLs)
+        character_selection_message = (
+            f"Great! Please select one of the following characters by replying with the corresponding number:\n"
+            + "\n".join([f"{i+1}. {char['name']}\n{char['image_url']}" for i, char in enumerate(CHARACTERS)])
+        )
 
         if user.status == "pending":
             # Expecting "Yes" or "No"
@@ -561,6 +618,31 @@ async def process_inbound_emails():
         if user.status == "active_with_character":
             logger.info(f"Processing message from active user {sender_part}: {body}")
 
+            # Check if the message is "stop" (case-insensitive and stripped)
+            if body.lower().strip() == "stop":
+                await update_user_preferences(sender_part, {"status": "declined"})
+                stop_confirmation_message = (
+                    "You have been unsubscribed and will no longer receive messages from your perfect gentleman. "
+                    "If you wish to resume, reply with 'Yes' at any time."
+                )
+                await send_sms(stop_confirmation_message, recipient_number=sender_part)
+                logger.info(f"User {sender_part} has unsubscribed from receiving messages.")
+                mark_email_as_read(msg_id)
+                continue
+
+            # If the message is not "stop", proceed normally
+            # Optionally, extract the user's name if not already done
+            if not user.personal_info.get("name"):
+                # Extract name from message
+                extracted_name = await extract_name_from_message(body)
+                if extracted_name:
+                    updated_info = user.personal_info.copy()
+                    updated_info["name"] = extracted_name
+                    await update_user_preferences(sender_part, {"personal_info": updated_info})
+                    logger.info(f"Updated personal_info in DB for {sender_part}: {updated_info}")
+                else:
+                    logger.info(f"No name extracted from message for {sender_part}")
+
             # Append user message to conversation
             user.conversation.append({"role": "user", "content": body})
 
@@ -580,6 +662,29 @@ async def process_inbound_emails():
             mark_email_as_read(msg_id)
             continue
 
+def get_timezone_from_phone_number(phone_number: str) -> str:
+    """
+    Parses the phone number and returns the primary timezone based on the area code.
+    If unable to determine, defaults to 'America/Chicago'.
+    """
+    try:
+        # Parse the phone number. Assume it's a US number.
+        parsed_number = phonenumbers.parse(phone_number, "US")
+        
+        # Get the timezone(s) for the number
+        time_zones = ph_timezone.time_zones_for_number(parsed_number)
+        
+        if time_zones:
+            # Return the first timezone in the list
+            return time_zones[0]
+        else:
+            logger.warning(f"No timezone found for phone number: {phone_number}. Defaulting to America/Chicago.")
+            return "America/Chicago"
+    except phonenumbers.NumberParseException as e:
+        logger.error(f"Error parsing phone number {phone_number}: {e}")
+        return "America/Chicago"
+
+
 # =======================
 # Main Application
 # =======================
@@ -597,26 +702,27 @@ async def main():
     asyncio.create_task(imap_check_loop())
 
     # Optionally send an initial message to a known recipient_number if active_with_character
-    user = await get_user(TEST_USER_NUMBER)
-    if user and user.status == "active_with_character":
-        prompts = await get_prompts()
-        if prompts:
-            default_message = prompts.morning_prompt
-            logger.info(f"Initial default_message: {default_message}")
-            response_message = await generate_message(default_message, TEST_USER_NUMBER)
-            if response_message:
-                # Append assistant's reply to conversation
-                user.conversation.append({"role": "assistant", "content": response_message})
-                await send_sms(response_message, recipient_number=TEST_USER_NUMBER)
-                # Update conversation in DB
-                await update_user_preferences(TEST_USER_NUMBER, {"conversation": user.conversation})
-                logger.info("Initial daily message sent.")
+    if TEST_USER_NUMBER:
+        user = await get_user(TEST_USER_NUMBER)
+        if user and user.status == "active_with_character":
+            prompts = await get_prompts()
+            if prompts:
+                default_message = prompts.morning_prompt
+                logger.info(f"Initial default_message: {default_message}")
+                response_message = await generate_message(default_message, TEST_USER_NUMBER)
+                if response_message:
+                    # Append assistant's reply to conversation
+                    user.conversation.append({"role": "assistant", "content": response_message})
+                    await send_sms(response_message, recipient_number=TEST_USER_NUMBER)
+                    # Update conversation in DB
+                    await update_user_preferences(TEST_USER_NUMBER, {"conversation": user.conversation})
+                    logger.info("Initial daily message sent.")
+                else:
+                    logger.warning("No response generated for initial daily message.")
             else:
-                logger.warning("No response generated for initial daily message.")
+                logger.warning("No prompts found, skipping initial daily message.")
         else:
-            logger.warning("No prompts found, skipping initial daily message.")
-    else:
-        logger.info(f"No active user found for {TEST_USER_NUMBER}, skipping initial daily message.")
+            logger.info(f"No active user found for {TEST_USER_NUMBER}, skipping initial daily message.")
 
     try:
         while True:
