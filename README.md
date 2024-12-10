@@ -75,7 +75,7 @@ Gentleman Bot relies on a `config.ini` file for configuration. Follow the steps 
    ```ini
    [OpenAI]
    api_key = your_openai_api_key
-   model = gpt-4
+   model = gpt-4o
 
    [Email]
    smtp_server = smtp.your-email-provider.com
