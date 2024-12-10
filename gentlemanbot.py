@@ -532,7 +532,7 @@ async def process_inbound_emails():
 
         # Retrieve user
         user = await get_user(sender_part)
-        logger.debug(f"Retrieved user from DB: {user}")
+        logger.debug(f"Retrieved user from DB: {user.to_dict() if user else None}")
 
         if user is None:
             carrier_gateway = from_email.split('@')[1] if '@' in from_email else ""
