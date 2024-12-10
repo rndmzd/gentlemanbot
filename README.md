@@ -39,8 +39,8 @@ Before setting up Gentleman Bot, ensure you have the following:
 1. **Clone the Repository**
 
    ```bash
-   git clone https://github.com/yourusername/gentleman-bot.git
-   cd gentleman-bot
+   git clone https://github.com/rndmzd/gentlemanbot.git
+   cd gentlemanbot
    ```
 
 2. **Create a Virtual Environment**
@@ -125,10 +125,10 @@ Gentleman Bot relies on a `config.ini` file for configuration. Follow the steps 
 Once configured, you can start the Gentleman Bot using the following command:
 
 ```bash
-python gentleman_bot.py
+python gentlemanbot.py
 ```
 
-*Ensure that the script filename matches the actual Python file. For example, if your main script is named `gentleman_bot.py`, use the command above.*
+*Ensure that the script filename matches the actual Python file. For example, if your main script is named `gentlemanbot.py`, use the command above.*
 
 ### Running as a Background Service
 
@@ -137,14 +137,14 @@ For continuous operation, consider running the bot as a background service using
 **Using `nohup`:**
 
 ```bash
-nohup python gentleman_bot.py &
+nohup python gentlemanbot.py &
 ```
 
 **Using `screen`:**
 
 ```bash
 screen -S gentleman_bot
-python gentleman_bot.py
+python gentlemanbot.py
 # Press Ctrl+A, then D to detach
 ```
 
@@ -152,7 +152,7 @@ python gentleman_bot.py
 
 ```
 gentleman-bot/
-├── gentleman_bot.py
+├── gentlemanbot.py
 ├── config.ini
 ├── requirements.txt
 ├── gentleman_bot.log
@@ -160,7 +160,7 @@ gentleman-bot/
 └── LICENSE
 ```
 
-- **gentleman_bot.py**: The main Python script containing the bot's logic.
+- **gentlemanbot.py**: The main Python script containing the bot's logic.
 - **config.ini**: Configuration file for setting up API keys, email credentials, MongoDB details, etc.
 - **requirements.txt**: Lists all Python dependencies.
 - **gentleman_bot.log**: Log file for monitoring and debugging.
@@ -178,8 +178,8 @@ Contributions are welcome! To contribute to Gentleman Bot, follow these steps:
 2. **Clone Your Fork**
 
    ```bash
-   git clone https://github.com/yourusername/gentleman-bot.git
-   cd gentleman-bot
+   git clone https://github.com/rndmzd/gentlemanbot.git
+   cd gentlemanbot
    ```
 
 3. **Create a New Branch**
@@ -214,4 +214,4 @@ This project is licensed under the [MIT License](LICENSE).
 
 ## Contact
 
-For any questions, issues, or feature requests, please open an issue on the [GitHub repository](https://github.com/yourusername/gentleman-bot/issues) or contact the maintainer at [your_email@example.com](mailto:your_email@example.com).
+For any questions, issues, or feature requests, please open an issue on the [GitHub repository](https://github.com/rndmzd/gentlemanbot/issues) or contact the maintainer at [rndmzd@protonmail.com](mailto:rndmzd@protonmail.com).
