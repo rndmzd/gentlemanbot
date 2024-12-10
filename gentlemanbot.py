@@ -84,7 +84,8 @@ imap_check_interval = int(config['Email']['imap_check_interval'])
 # SMS recipient configuration
 # recipient_carrier_gateway = config['SMS']['recipient_carrier_gateway']
 # recipient_number = config['SMS']['recipient_number']
-TEST_USER_NUMBER = config['SMS']['recipient_number']
+# TEST_USER_NUMBER = config['SMS']['recipient_number']
+TEST_USER_NUMBER = None
 
 # =======================
 # MongoDB Setup
