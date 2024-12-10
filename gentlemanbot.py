@@ -362,56 +362,67 @@ async def send_sms(message: str, recipient_number: str, recipient_carrier_gatewa
 # Daily Cron Job
 # =======================
 
-@aiocron.crontab('0 9,15,21 * * *')  # Runs at 9:00 AM, 3:00 PM, and 9:00 PM every day
-async def daily_message(recipient_number: str):
+@aiocron.crontab('* * * * *')  # Runs every minute
+async def daily_message():
     logger.info("Running daily_message cron job...")
-    user = await get_user(recipient_number)
-    if not user or user.status != "active_with_character":
-        logger.info("User is not active with a character selected or doesn't exist, skipping daily message.")
+    users = await get_all_active_users()
+    if not users:
+        logger.info("No active users found, skipping daily message.")
         return
 
-    if not user.timezone:
-        logger.warning(f"User {recipient_number} does not have a timezone set. Skipping message.")
-        return
-
-    try:
-        user_timezone = pytz.timezone(user.timezone)
-    except pytz.UnknownTimeZoneError:
-        logger.error(f"Unknown timezone '{user.timezone}' for user {recipient_number}. Skipping message.")
-        return
-
-    # Get current time in user's timezone
-    current_time = datetime.now(user_timezone)
-    current_hour = current_time.hour
-
-    # Retrieve system prompts
     prompts = await get_prompts()
     if not prompts:
         logger.warning("No prompts found, skipping daily message.")
         return
 
-    # Determine time of day
-    if 4 <= current_hour < 12:
-        prompt = prompts.morning_prompt
-        time_of_day = "morning"
-    elif 12 <= current_hour < 17:
-        prompt = prompts.afternoon_prompt
-        time_of_day = "afternoon"
-    elif 17 <= current_hour < 22 or current_hour < 4:
-        prompt = prompts.evening_prompt
-        time_of_day = "evening"
-    else:
-        # Optional: Handle late night messages or skip sending. Never executes with the current time windows
-        logger.info(f"It's outside of defined sending hours ({current_hour}h). Skipping message.")
-        return
+    for user in users:
+        if not user.timezone:
+            logger.warning(f"User {user.phone_number} does not have a timezone set. Skipping message.")
+            continue
 
-    # Generate customized message
-    message = await generate_message(prompt, recipient_number)
-    if message:
-        await send_sms(message, recipient_number)
-        logger.info(f"Daily {time_of_day} message sent successfully to {recipient_number}.")
-    else:
-        logger.warning("No message generated for daily message.")
+        try:
+            user_timezone = pytz.timezone(user.timezone)
+        except pytz.UnknownTimeZoneError:
+            logger.error(f"Unknown timezone '{user.timezone}' for user {user.phone_number}. Skipping message.")
+            continue
+
+        # Get current time in user's timezone
+        current_time = datetime.now(user_timezone)
+        current_hour = current_time.hour
+
+        # Determine if it's time to send a message
+        # For example, send at 9 AM, 3 PM, and 9 PM
+        if current_hour in [9, 15, 21] and current_time.minute == 0:
+            if 5 <= current_hour < 12:
+                prompt = prompts.morning_prompt
+                time_of_day = "morning"
+            elif 12 <= current_hour < 17:
+                prompt = prompts.afternoon_prompt
+                time_of_day = "afternoon"
+            elif 17 <= current_hour < 22:
+                prompt = prompts.evening_prompt
+                time_of_day = "evening"
+            else:
+                logger.info(f"User {user.phone_number}: Current time {current_hour}:00 is outside defined sending hours.")
+                continue
+
+            # Generate customized message
+            message = await generate_message(prompt, user.phone_number)
+            if message:
+                await send_sms(message, user.phone_number)
+                logger.info(f"Daily {time_of_day} message sent successfully to {user.phone_number}.")
+            else:
+                logger.warning(f"No message generated for user {user.phone_number} at {time_of_day}.")
+
+async def get_all_active_users() -> List[UserPreferences]:
+    logger.debug("Retrieving all active users with selected characters.")
+    users = []
+    cursor = users_collection.find({"status": "active_with_character"})
+    async for user_data in cursor:
+        users.append(UserPreferences(**user_data))
+    logger.debug(f"Retrieved {len(users)} active users.")
+    return users
+
 
 
 # =======================
