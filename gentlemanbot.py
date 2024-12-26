@@ -470,17 +470,44 @@ def check_imap_inbox() -> List[Dict]:
                 body = None
                 if msg.is_multipart():
                     for part in msg.walk():
-                        if part.get_content_type() == "text/plain" and not part.get('Content-Disposition'):
+                        content_type = part.get_content_type()
+                        content_disposition = str(part.get('Content-Disposition'))
+                        if content_type == "text/plain" and 'attachment' not in content_disposition:
                             payload = part.get_payload(decode=True)
                             if payload:
                                 charset = part.get_content_charset() or 'utf-8'
                                 body = payload.decode(charset, errors='replace')
-                                break
+                                logger.debug(f"Extracted text/plain body for msg_id={msg_id.decode()}")
+                                break  # Prefer text/plain over text/html
+                    else:
+                        # If no text/plain part is found, try text/html
+                        for part in msg.walk():
+                            content_type = part.get_content_type()
+                            content_disposition = str(part.get('Content-Disposition'))
+                            if content_type == "text/html" and 'attachment' not in content_disposition:
+                                payload = part.get_payload(decode=True)
+                                if payload:
+                                    charset = part.get_content_charset() or 'utf-8'
+                                    html_body = payload.decode(charset, errors='replace')
+                                    # Optionally, convert HTML to plain text
+                                    body = html2text(html_body)
+                                    logger.debug(f"Extracted text/html body for msg_id={msg_id.decode()}")
+                                    break
                 else:
-                    payload = msg.get_payload(decode=True)
-                    if payload:
-                        charset = msg.get_content_charset() or 'utf-8'
-                        body = payload.decode(charset, errors='replace')
+                    content_type = msg.get_content_type()
+                    if content_type == "text/plain":
+                        payload = msg.get_payload(decode=True)
+                        if payload:
+                            charset = msg.get_content_charset() or 'utf-8'
+                            body = payload.decode(charset, errors='replace')
+                            logger.debug(f"Extracted text/plain body for msg_id={msg_id.decode()}")
+                    elif content_type == "text/html":
+                        payload = msg.get_payload(decode=True)
+                        if payload:
+                            charset = msg.get_content_charset() or 'utf-8'
+                            html_body = payload.decode(charset, errors='replace')
+                            body = html2text(html_body)
+                            logger.debug(f"Extracted text/html body for msg_id={msg_id.decode()}")
 
                 if body:
                     messages.append({
@@ -488,10 +515,9 @@ def check_imap_inbox() -> List[Dict]:
                         "from": from_,
                         "body": body.strip()
                     })
-                    logger.debug(f"Extracted body for msg_id={msg_id.decode()}: {body.strip()}")
+                    logger.debug(f"Appended body for msg_id={msg_id.decode()}: {body.strip()}")
                 else:
                     logger.debug(f"No body found for message {msg_id.decode()}")
-
         else:
             logger.warning("Failed to search for UNSEEN messages in IMAP.")
 
@@ -503,6 +529,7 @@ def check_imap_inbox() -> List[Dict]:
     except Exception as e:
         logger.exception(f"Error checking IMAP inbox: {e}")
         return []
+
 
 def mark_email_as_read(msg_id: str):
     """
