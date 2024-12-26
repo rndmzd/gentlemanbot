@@ -473,6 +473,7 @@ def check_imap_inbox() -> List[Dict]:
                     for part in msg.walk():
                         content_type = part.get_content_type()
                         content_disposition = str(part.get('Content-Disposition'))
+                        logger.debug(f"Found part with Content-Type: {content_type}, Content-Disposition: {content_disposition}")
                         if content_type == "text/plain" and 'attachment' not in content_disposition:
                             payload = part.get_payload(decode=True)
                             if payload:
@@ -485,17 +486,18 @@ def check_imap_inbox() -> List[Dict]:
                         for part in msg.walk():
                             content_type = part.get_content_type()
                             content_disposition = str(part.get('Content-Disposition'))
+                            logger.debug(f"Checking for text/html part: Content-Type={content_type}, Content-Disposition={content_disposition}")
                             if content_type == "text/html" and 'attachment' not in content_disposition:
                                 payload = part.get_payload(decode=True)
                                 if payload:
                                     charset = part.get_content_charset() or 'utf-8'
                                     html_body = payload.decode(charset, errors='replace')
-                                    # Optionally, convert HTML to plain text
-                                    body = html2text(html_body)
+                                    body = html2text.html2text(html_body)
                                     logger.debug(f"Extracted text/html body for msg_id={msg_id.decode()}")
                                     break
                 else:
                     content_type = msg.get_content_type()
+                    logger.debug(f"Singlepart message Content-Type: {content_type}")
                     if content_type == "text/plain":
                         payload = msg.get_payload(decode=True)
                         if payload:
@@ -507,7 +509,7 @@ def check_imap_inbox() -> List[Dict]:
                         if payload:
                             charset = msg.get_content_charset() or 'utf-8'
                             html_body = payload.decode(charset, errors='replace')
-                            body = html2text(html_body)
+                            body = html2text.html2text(html_body)
                             logger.debug(f"Extracted text/html body for msg_id={msg_id.decode()}")
 
                 if body:
