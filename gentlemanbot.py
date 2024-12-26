@@ -623,9 +623,12 @@ async def process_inbound_emails():
                     selection_ack_message = f"Awesome! I'm {selected_character['name']}, and I'm here to be your perfect gentleman. What's your name?"
                     await send_sms(selection_ack_message, recipient_number=sender_part)
                     logger.info(f"User {sender_part} selected character {selected_character['name']}")
-                    
+
                     # Update conversation with a system message to set the bot's name
-                    user.conversation.append({"role": "system", "content": f"You are now {selected_character['name']}, a charismatic boyfriend who sends compliments and encouraging text messages to his girlfriend. You are energetic, fun-loving, easy-going, and always act like a gentleman. Messages should be informal, casual, and no more than 240 characters in length."})
+                    user.conversation.append({
+                        "role": "system",
+                        "content": f"You are now {selected_character['name']}, a charismatic boyfriend who sends compliments and encouraging text messages to his girlfriend. You are energetic, fun-loving, easy-going, and always act like a gentleman. Messages should be informal, casual, and no more than 240 characters in length."
+                    })
                     await update_user_preferences(sender_part, {"conversation": user.conversation})
                 else:
                     # Invalid selection
