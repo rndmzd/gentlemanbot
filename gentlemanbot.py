@@ -16,6 +16,7 @@ import phonenumbers
 from phonenumbers import geocoder, timezone as ph_timezone
 import json
 import sys
+import html2text
 
 # =======================
 # Configuration and Logging
